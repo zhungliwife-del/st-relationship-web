@@ -1,6 +1,6 @@
 // NPC Relationship Web — fandom-independent relationship and genealogy editor for SillyTavern.
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const MODULE = 'st-relationship-web';
 const INJECT_KEY = 'relationship_web';
 
@@ -297,6 +297,29 @@ function parseMessage(messageId) {
     }
 }
 
+function graphDimensions() {
+    const people = allPeople();
+    if (settings().mode === 'tree') {
+        const levels = genealogyLevels(people.map(p => p.name));
+        const maxInLevel = Math.max(1, ...Object.values(levels.grouped).map(g => g.length));
+        const levelCount = Math.max(1, Object.keys(levels.grouped).length);
+        return { width: Math.max(980, maxInLevel * 220), height: Math.max(560, levelCount * 150 + 120) };
+    }
+    return { width: Math.max(980, people.length * 170), height: Math.max(560, Math.min(900, people.length * 70)) };
+}
+
+function applyCanvasDimensions() {
+    const canvas = $('#rweb_canvas');
+    if (!canvas.length) return;
+    const dim = graphDimensions();
+    canvas.css({ width: `${dim.width}px`, height: `${dim.height}px` });
+}
+
+function genealogyLevels(people) {
+    const { grouped } = genealogyLevels(people);
+    return { levels, grouped };
+}
+
 function sizeCanvas(canvas) {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -312,6 +335,7 @@ function sizeCanvas(canvas) {
 }
 
 function drawCurrentView() {
+    applyCanvasDimensions();
     if (settings().mode === 'tree') drawGenealogy();
     else drawWeb();
 }
@@ -328,11 +352,12 @@ function drawWeb() {
     if (!nodes.length) return;
     const cx = W / 2;
     const cy = H / 2;
-    const R = Math.max(80, Math.min(W, H) / 2 - 58);
+    const rx = Math.max(180, W / 2 - 130);
+    const ry = Math.max(150, H / 2 - 105);
     const pos = {};
     nodes.forEach((name, i) => {
         const angle = (2 * Math.PI * i) / nodes.length - Math.PI / 2;
-        pos[name] = { x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) };
+        pos[name] = { x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) };
     });
     drawEdges(g, pos);
     drawNodes(g, pos, W, H);
@@ -348,19 +373,7 @@ function drawGenealogy() {
 
     const people = allPeople().map(p => p.name);
     if (!people.length) return;
-    const levels = Object.fromEntries(people.map(name => [name, 0]));
-    const parentEdges = [];
-    for (const r of settings().relations) {
-        if (r.type === 'parent') parentEdges.push([r.a, r.b]);
-        if (r.type === 'child') parentEdges.push([r.b, r.a]);
-    }
-    for (let pass = 0; pass < people.length + 2; pass++) {
-        for (const [parent, child] of parentEdges) {
-            levels[child] = Math.max(levels[child] ?? 0, (levels[parent] ?? 0) + 1);
-        }
-    }
-    const grouped = {};
-    for (const name of people) (grouped[levels[name] ?? 0] ??= []).push(name);
+    const { grouped } = genealogyLevels(people);
     const levelKeys = Object.keys(grouped).map(Number).sort((a, b) => a - b);
     const pos = {};
     const top = 44;
@@ -369,7 +382,7 @@ function drawGenealogy() {
         const group = grouped[levelKeys[li]];
         const y = top + li * stepY;
         for (let i = 0; i < group.length; i++) {
-            const x = (W / (group.length + 1)) * (i + 1);
+            const x = Math.max(120, (W / (group.length + 1)) * (i + 1));
             pos[group[i]] = { x, y };
         }
     }
@@ -402,9 +415,7 @@ function drawEdges(g, pos, genealogy = false) {
         }
         g.stroke();
         g.setLineDash([]);
-        const mx = (p1.x + p2.x) / 2;
-        const my = (p1.y + p2.y) / 2;
-        g.fillText(relLabel(r.type), mx + 4, my - 4);
+        drawEdgeLabel(g, relLabel(r.type), p1, p2, REL_COLORS[r.type] || '#888');
     }
 }
 
@@ -413,16 +424,35 @@ function drawNodes(g, pos, W, H) {
         const person = allPeople().find(x => x.name === name) || { role: '' };
         g.fillStyle = '#252a30';
         g.strokeStyle = '#d0d7de';
-        roundRect(g, p.x - 58, p.y - 18, 116, 36, 12, true, true);
+        const boxW = 168;
+        const boxH = person.role ? 52 : 42;
+        roundRect(g, p.x - boxW / 2, p.y - boxH / 2, boxW, boxH, 14, true, true);
         g.fillStyle = '#f2f2f2';
         g.font = 'bold 12px sans-serif';
-        drawCentered(g, name, p.x, p.y - 2, 104);
+        drawCentered(g, name, p.x, person.role ? p.y - 6 : p.y + 4, 154);
         if (person.role) {
             g.fillStyle = '#aeb6c2';
             g.font = '10px sans-serif';
-            drawCentered(g, person.role, p.x, p.y + 12, 104);
+            drawCentered(g, person.role, p.x, p.y + 13, 154);
         }
     }
+}
+
+function drawEdgeLabel(g, text, p1, p2, color) {
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    const nx = -dy / len;
+    const ny = dx / len;
+    const x = (p1.x + p2.x) / 2 + nx * 18;
+    const y = (p1.y + p2.y) / 2 + ny * 18;
+    g.font = '12px sans-serif';
+    const w = Math.min(140, g.measureText(text).width + 12);
+    g.fillStyle = 'rgba(16, 18, 20, 0.86)';
+    g.strokeStyle = color;
+    roundRect(g, x - w / 2, y - 12, w, 20, 8, true, true);
+    g.fillStyle = color;
+    g.fillText(text, x - w / 2 + 6, y + 3, w - 12);
 }
 
 function roundRect(g, x, y, w, h, r, fill, stroke) {

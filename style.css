@@ -1,0 +1,88 @@
+.rweb-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.rweb-pair {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rweb-type {
+    font-size: 0.85em;
+    font-weight: bold;
+}
+
+.rweb-del {
+    padding: 2px 6px;
+    font-size: 0.85em;
+}
+
+.rweb-lang,
+.rweb-add {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.rweb-add input {
+    flex: 1;
+    min-width: 100px;
+}
+
+#rweb_popup {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#rweb_popup_inner {
+    background: var(--SmartThemeBlurTintColor, #1a1a1a);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 10px;
+    padding: 12px;
+    max-width: 95vw;
+    max-height: 95vh;
+    overflow: auto;
+}
+
+#rweb_popup_header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+#rweb_canvas {
+    background: #111;
+    border-radius: 8px;
+    max-width: 100%;
+}
+
+#rweb_legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-size: 0.85em;
+}
+
+#rweb_legend i {
+    display: inline-block;
+    width: 12px;
+    height: 4px;
+    margin-right: 4px;
+    vertical-align: middle;
+    border-radius: 2px;
+}

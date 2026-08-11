@@ -1,6 +1,6 @@
 // NPC Relationship Web — fandom-independent relationship and genealogy editor for SillyTavern.
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const MODULE = 'st-relationship-web';
 const INJECT_KEY = 'relationship_web';
 
@@ -60,6 +60,10 @@ const L10N = {
         parsedToast: (a, b, type) => `${a} × ${b}: ${type}`,
         webTitle: 'Relationship Web',
         close: 'Close',
+        zoomIn: 'Zoom +',
+        zoomOut: 'Zoom −',
+        resetZoom: 'Fit',
+        dragHint: 'Drag the map; use +/− to zoom.',
         confirmClear: 'Clear all people and relations?',
     },
     ru: {
@@ -99,6 +103,10 @@ const L10N = {
         parsedToast: (a, b, type) => `${a} × ${b}: ${type}`,
         webTitle: 'Карта отношений',
         close: 'Закрыть',
+        zoomIn: 'Масштаб +',
+        zoomOut: 'Масштаб −',
+        resetZoom: 'Вписать',
+        dragHint: 'Тяни карту пальцем; +/− меняют масштаб.',
         confirmClear: 'Очистить всех персонажей и связи?',
     },
 };
@@ -297,6 +305,8 @@ function parseMessage(messageId) {
     }
 }
 
+const graphView = { scale: 1, x: 0, y: 0, fitted: false, dragging: false, lastX: 0, lastY: 0 };
+
 function graphDimensions() {
     const people = allPeople();
     if (settings().mode === 'tree') {
@@ -313,18 +323,103 @@ function applyCanvasDimensions() {
     if (!canvas.length) return;
     const dim = graphDimensions();
     canvas.css({ width: `${dim.width}px`, height: `${dim.height}px` });
+    applyGraphTransform();
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function applyGraphTransform() {
+    const canvas = $('#rweb_canvas');
+    if (!canvas.length) return;
+    canvas.css('transform', `translate(${graphView.x}px, ${graphView.y}px) scale(${graphView.scale})`);
+    $('#rweb_zoom_label').text(`${Math.round(graphView.scale * 100)}%`);
+}
+
+function fitGraphView() {
+    const viewport = document.getElementById('rweb_canvas_viewport');
+    const canvas = document.getElementById('rweb_canvas');
+    if (!viewport || !canvas) return;
+    const cw = parseFloat(canvas.style.width) || canvas.offsetWidth || 980;
+    const ch = parseFloat(canvas.style.height) || canvas.offsetHeight || 560;
+    const scale = clamp(Math.min(viewport.clientWidth / cw, viewport.clientHeight / ch), 0.25, 1.2);
+    graphView.scale = scale;
+    graphView.x = Math.max(0, (viewport.clientWidth - cw * scale) / 2);
+    graphView.y = Math.max(0, (viewport.clientHeight - ch * scale) / 2);
+    graphView.fitted = true;
+    applyGraphTransform();
+}
+
+function zoomGraph(factor) {
+    const viewport = document.getElementById('rweb_canvas_viewport');
+    if (!viewport) return;
+    const oldScale = graphView.scale;
+    const newScale = clamp(oldScale * factor, 0.25, 3);
+    const cx = viewport.clientWidth / 2;
+    const cy = viewport.clientHeight / 2;
+    graphView.x = cx - (cx - graphView.x) * (newScale / oldScale);
+    graphView.y = cy - (cy - graphView.y) * (newScale / oldScale);
+    graphView.scale = newScale;
+    graphView.fitted = true;
+    applyGraphTransform();
+}
+
+function bindGraphControls() {
+    $('#rweb_zoom_in').on('click', () => zoomGraph(1.2));
+    $('#rweb_zoom_out').on('click', () => zoomGraph(1 / 1.2));
+    $('#rweb_zoom_reset').on('click', fitGraphView);
+    const viewport = document.getElementById('rweb_canvas_viewport');
+    if (!viewport) return;
+    viewport.addEventListener('pointerdown', (event) => {
+        graphView.dragging = true;
+        graphView.lastX = event.clientX;
+        graphView.lastY = event.clientY;
+        viewport.setPointerCapture?.(event.pointerId);
+        viewport.classList.add('dragging');
+    });
+    viewport.addEventListener('pointermove', (event) => {
+        if (!graphView.dragging) return;
+        graphView.x += event.clientX - graphView.lastX;
+        graphView.y += event.clientY - graphView.lastY;
+        graphView.lastX = event.clientX;
+        graphView.lastY = event.clientY;
+        applyGraphTransform();
+    });
+    const endDrag = (event) => {
+        graphView.dragging = false;
+        viewport.releasePointerCapture?.(event.pointerId);
+        viewport.classList.remove('dragging');
+    };
+    viewport.addEventListener('pointerup', endDrag);
+    viewport.addEventListener('pointercancel', endDrag);
+    viewport.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        zoomGraph(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+    }, { passive: false });
 }
 
 function genealogyLevels(people) {
-    const { grouped } = genealogyLevels(people);
+    const levels = Object.fromEntries(people.map(name => [name, 0]));
+    const parentEdges = [];
+    for (const r of settings().relations) {
+        if (r.type === 'parent') parentEdges.push([r.a, r.b]);
+        if (r.type === 'child') parentEdges.push([r.b, r.a]);
+    }
+    for (let pass = 0; pass < people.length + 2; pass++) {
+        for (const [parent, child] of parentEdges) {
+            levels[child] = Math.max(levels[child] ?? 0, (levels[parent] ?? 0) + 1);
+        }
+    }
+    const grouped = {};
+    for (const name of people) (grouped[levels[name] ?? 0] ??= []).push(name);
     return { levels, grouped };
 }
 
 function sizeCanvas(canvas) {
-    const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(320, Math.floor(rect.width || 900));
-    const height = Math.max(300, Math.floor(rect.height || 560));
+    const width = Math.max(320, Math.floor(parseFloat(canvas.style.width) || canvas.offsetWidth || 900));
+    const height = Math.max(300, Math.floor(parseFloat(canvas.style.height) || canvas.offsetHeight || 560));
     if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
         canvas.width = Math.floor(width * dpr);
         canvas.height = Math.floor(height * dpr);
@@ -338,6 +433,8 @@ function drawCurrentView() {
     applyCanvasDimensions();
     if (settings().mode === 'tree') drawGenealogy();
     else drawWeb();
+    if (!graphView.fitted) fitGraphView();
+    else applyGraphTransform();
 }
 
 function drawWeb() {
@@ -480,7 +577,14 @@ function openWebPopup() {
                 <b>${t().webTitle} <span class="rweb-version">v${VERSION}</span></b>
                 <div class="menu_button" id="rweb_close">${t().close}</div>
             </div>
-            <canvas id="rweb_canvas"></canvas>
+            <div id="rweb_toolbar">
+                <div class="menu_button" id="rweb_zoom_out">${t().zoomOut}</div>
+                <span id="rweb_zoom_label">100%</span>
+                <div class="menu_button" id="rweb_zoom_in">${t().zoomIn}</div>
+                <div class="menu_button" id="rweb_zoom_reset">${t().resetZoom}</div>
+                <span class="rweb-drag-hint">${t().dragHint}</span>
+            </div>
+            <div id="rweb_canvas_viewport"><canvas id="rweb_canvas"></canvas></div>
             <div id="rweb_legend">
                 ${REL_TYPES.map(type => `<span><i style="background:${REL_COLORS[type]}"></i>${relLabel(type)}</span>`).join('')}
             </div>
@@ -489,6 +593,11 @@ function openWebPopup() {
     $('body').append(html);
     $('#rweb_close').on('click', () => $('#rweb_popup').remove());
     $('#rweb_popup').on('click', function (e) { if (e.target === this) $(this).remove(); });
+    graphView.scale = 1;
+    graphView.x = 0;
+    graphView.y = 0;
+    graphView.fitted = false;
+    bindGraphControls();
     setTimeout(drawCurrentView, 0);
 }
 
@@ -608,7 +717,7 @@ function renderPanel() {
     $('#rweb_inject').on('change', function () { s.inject = this.checked; save(); updateInjection(); });
     $('#rweb_autoparse').on('change', function () { s.autoParse = this.checked; save(); });
     $('#rweb_lang').on('change', function () { s.lang = this.value; save(); renderPanel(); updateInjection(); });
-    $('#rweb_mode').on('change', function () { s.mode = this.value; save(); drawCurrentView(); });
+    $('#rweb_mode').on('change', function () { s.mode = this.value; save(); graphView.fitted = false; drawCurrentView(); });
     $('#rweb_open').on('click', openWebPopup);
     $('#rweb_add_person').on('click', () => {
         addPerson($('#rweb_person_name').val(), $('#rweb_person_role').val(), $('#rweb_person_note').val());

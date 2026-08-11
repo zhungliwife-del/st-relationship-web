@@ -1,15 +1,27 @@
-# 🕸️ NPC Relationship Web — SillyTavern Extension
+# NPC Relationship Web — SillyTavern Extension
 
-**EN:** Interactive relationship graph for large RP casts: dating, exes, friends, enemies, family, crew, crush — rendered on canvas with a color legend. Injects the whole web into the prompt so the AI keeps relationships consistent, and auto-updates when the AI emits `[REL: Name A x Name B = type]` tags (they are stripped from the visible message). UI in English or Russian.
+Фэндом-независимая карта отношений и генеалогическое дерево для RP. Подходит для Hale University, Voodoo & Bayou, городских сеттингов, семейных драм и любых кастомных персонажей.
 
-**RU:** Интерактивный граф отношений для RP с большим кастом: встречаются, бывшие, друзья, враги, семья, банда, влюблённость — на canvas с цветовой легендой. Внедряет карту в промпт, чтобы ИИ соблюдал отношения, и автоматически обновляется по тегам `[REL: Имя A x Имя B = type]` из ответов ИИ (теги убираются из видимого текста). Интерфейс на английском или русском.
+## Возможности
 
-## Install / Установка
+- Ручное добавление персонажей: имя, роль/группа/фракция, заметка.
+- Ручное добавление связей между NPC или персонажами пользователя.
+- Типы связей: dating, ex, friends, enemies, family, parent, child, sibling, spouse, crew/same group, crush, ally, rival.
+- Два режима просмотра: обычная карта отношений и генеалогическое дерево.
+- Мобильный popup: canvas адаптируется под экран телефона, легенда не перекрывает чат.
+- Опциональные шаблоны: Hale University и Voodoo & Bayou. По умолчанию расширение пустое и не привязано к фэндому.
+- Инжект в промпт: ИИ видит текущие персонажи и связи и обязан сохранять их консистентными.
+- Авто-парсинг тегов из ответов ИИ: `[REL: Name A x Name B = parent | optional note]`.
 
-Extensions → Install extension → `https://github.com/zhungliwife-del/st-relationship-web`
+## Установка
 
-Or copy this folder to `SillyTavern/data/<user>/extensions/` (ST 1.12+) / Или скопируйте папку в `SillyTavern/data/<пользователь>/extensions/`.
+SillyTavern → Extensions → Install extension → URL:
 
-## Usage / Использование
+`https://github.com/zhungliwife-del/st-relationship-web`
 
-Add relations in the panel (Name A, Name B, type, optional note) and click **Open web** to see the graph. Relation types / типы связей: `dating, ex, friends, enemies, family, crew, crush`.
+## Использование
+
+1. В панели **Relationship Web** добавь персонажей в блоке **Персонажи**.
+2. В блоке **Связи** добавь связь между двумя именами и выбери тип.
+3. Для генеалогии выбирай типы `parent`, `child`, `sibling`, `spouse`, `family` и переключи режим на **Генеалогическое дерево**.
+4. Нажми **Открыть карту**, чтобы увидеть граф.

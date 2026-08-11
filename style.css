@@ -2,7 +2,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 3px 0;
+    padding: 5px 0;
     border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
 }
 
@@ -16,6 +16,7 @@
 .rweb-type {
     font-size: 0.85em;
     font-weight: bold;
+    white-space: nowrap;
 }
 
 .rweb-del {
@@ -32,47 +33,72 @@
     flex-wrap: wrap;
 }
 
-.rweb-add input {
+.rweb-add input,
+.rweb-add select {
     flex: 1;
-    min-width: 100px;
+    min-width: 120px;
+}
+
+.rweb-section {
+    margin-top: 10px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.rweb-section summary {
+    cursor: pointer;
+}
+
+.rweb-version {
+    font-size: 0.72em;
+    opacity: 0.65;
 }
 
 #rweb_popup {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    z-index: 10000;
+    background: rgba(0, 0, 0, 0.72);
+    z-index: 2147483000;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 8px;
+    box-sizing: border-box;
 }
 
 #rweb_popup_inner {
     background: var(--SmartThemeBlurTintColor, #1a1a1a);
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 10px;
-    padding: 12px;
-    max-width: 95vw;
-    max-height: 95vh;
+    border-radius: 12px;
+    padding: 10px;
+    width: min(980px, 100%);
+    max-height: calc(100dvh - 16px);
     overflow: auto;
+    box-sizing: border-box;
 }
 
 #rweb_popup_header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
     margin-bottom: 8px;
 }
 
 #rweb_canvas {
-    background: #111;
-    border-radius: 8px;
-    max-width: 100%;
+    display: block;
+    width: 100%;
+    height: min(62dvh, 620px);
+    min-height: 320px;
+    background: #101214;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
 }
 
 #rweb_legend {
     display: flex;
-    gap: 14px;
+    gap: 12px;
     flex-wrap: wrap;
     margin-top: 8px;
     font-size: 0.85em;
@@ -80,9 +106,35 @@
 
 #rweb_legend i {
     display: inline-block;
-    width: 12px;
-    height: 4px;
+    width: 14px;
+    height: 5px;
     margin-right: 4px;
     vertical-align: middle;
     border-radius: 2px;
+}
+
+@media (max-width: 600px) {
+    #rweb_popup {
+        padding: 4px;
+        align-items: flex-start;
+    }
+
+    #rweb_popup_inner {
+        max-height: calc(100dvh - 8px);
+    }
+
+    #rweb_canvas {
+        height: 58dvh;
+        min-height: 280px;
+    }
+
+    .rweb-lang,
+    .rweb-add {
+        gap: 6px;
+    }
+
+    .rweb-add input,
+    .rweb-add select {
+        min-width: 100%;
+    }
 }

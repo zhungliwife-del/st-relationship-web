@@ -1,11 +1,11 @@
 {
-    "display_name": "NPC Relationship Web",
+    "display_name": "Relationship Web & Genealogy",
     "loading_order": 100,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "Capy",
-    "version": "1.0.0",
-    "homePage": ""
+    "author": "RinAsteria",
+    "version": "2.0.0",
+    "homePage": "https://github.com/zhungliwife-del/st-relationship-web"
 }

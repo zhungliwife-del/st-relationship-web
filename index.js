@@ -1,6 +1,6 @@
 // NPC Relationship Web — fandom-independent relationship and genealogy editor for SillyTavern.
 
-const VERSION = '2.4.0';
+const VERSION = '2.5.0';
 const MODULE = 'st-relationship-web';
 const INJECT_KEY = 'relationship_web';
 
@@ -303,14 +303,24 @@ function updateInjection() {
     c.setExtensionPrompt(INJECT_KEY, lines.join('\n'), 1, 4);
 }
 
-function currentUserName() {
+function currentUserName(message = null) {
     const c = ctx();
-    return normalizeName(c.name1 || c.user?.name || c.persona?.name || c.character?.name || 'User');
+    return normalizeName(c.name1 || c.user?.name || c.persona?.name || message?.name || c.character?.name || 'User');
+}
+
+function stripInternalBlocks(text) {
+    return String(text || '')
+        .replace(/⟦[^⟧]*THINKING START⟧[\s\S]*?⟦[^⟧]*THINKING END⟧/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .split(/\n+/)
+        .filter(line => !/^\s*(##|###|think:|-\s*(Model|Pace|Ход|Проверка|Что он|Новое сообщение|Компоненты|NPC-пульс|Plot Pulse|Ресурсы)|\[COMMAND:|<!--)/i.test(line))
+        .join('\n');
 }
 
 function sentenceParts(text) {
-    return String(text || '')
-        .replace(/<[^>]+>/g, ' ')
+    return stripInternalBlocks(text)
         .split(/(?<=[.!?。！？])\s+|\n+/)
         .map(x => x.trim())
         .filter(Boolean);
@@ -326,6 +336,9 @@ const STOP_NAMES = new Set([
     'the', 'a', 'an', 'he', 'she', 'they', 'we', 'i', 'you', 'it', 'his', 'her', 'their', 'this', 'that',
     'он', 'она', 'они', 'мы', 'я', 'ты', 'вы', 'его', 'её', 'ее', 'их', 'это', 'этот', 'эта', 'тот', 'та',
     'new orleans', 'french quarter', 'bayou crew', 'voodoo boys', 'cash casino', 'club zion', 'nopd',
+    'pov', 'point of view', 'model', 'language', 'prose', 'tense', 'pace', 'world', 'format', 'length',
+    'thinking start', 'thinking end', 'config', 'turn boundary', 'plot pulse', 'npc pulse', 'skip', 'fire',
+    'точка зрения', 'модель', 'язык', 'проза', 'время', 'конфиг', 'ход', 'проверка сцены',
 ]);
 
 function cleanDetectedName(value) {
@@ -333,7 +346,10 @@ function cleanDetectedName(value) {
         .replace(/^[\s,.:;—–\-"“”'’]+|[\s,.:;—–\-"“”'’]+$/g, '')
         .replace(/[’']s$/i, '');
     name = name.replace(/\s+/g, ' ');
-    if (!name || STOP_NAMES.has(name.toLowerCase())) return '';
+    const lower = name.toLowerCase();
+    if (!name || STOP_NAMES.has(lower)) return '';
+    if (/\b(pov|model|language|prose|tense|thinking|config|turn|boundary|skip|fire|точка зрения|модель|конфиг)\b/i.test(name)) return '';
+    if (/^(wife|husband|mother|father|mom|dad|son|daughter|boyfriend|girlfriend|girl|boy|муж|жена|мать|отец|мама|папа|сын|дочь|девушка|парень)$/i.test(name)) return '';
     if (name.length < 2 || name.length > 80) return '';
     return name;
 }
@@ -424,7 +440,7 @@ function mentionedActors(sentence, message) {
         const re = new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegExp(name)}([^\\p{L}\\p{N}_]|$)`, 'iu');
         if (re.test(sentence)) add(name);
     }
-    const userName = currentUserName();
+    const userName = currentUserName(message);
     if (userName && userName !== 'User') {
         const re = new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegExp(userName)}([^\\p{L}\\p{N}_]|$)`, 'iu');
         if (re.test(sentence)) add(userName);
@@ -436,18 +452,14 @@ function mentionedActors(sentence, message) {
 }
 
 const EVENT_RULES = [
-    { type: 'spouse', note: 'auto: marriage/wedding happened in RP', re: /\b(married|wedding|wed\b|husband|wife|spouse)\b|\b(поженил|поженились|свадьб|мужем|женой|супруг|супруга)\b/i },
-    { type: 'ex', note: 'auto: breakup happened in RP', re: /\b(broke up|breaks up|dumped|left him|left her|ended their relationship|exes?)\b|\b(расстал|расстались|бросил|бросила|бывш|разрыв отношений)\b/i },
-    { type: 'dating', note: 'auto: romantic relationship happened in RP', re: /\b(started dating|became a couple|became lovers|lovers|boyfriend|girlfriend|slept together|spent the night together|kissed passionately|kissed him|kissed her|kissed them|kissed)\b|\b(начали встречаться|стали парой|любовник|любовница|парень|девушка|переспал|переспала|поцеловал|поцеловала|поцеловали|поцелуй|страстно поцелов)\b/i },
+    { type: 'ex', note: 'auto: breakup happened in RP', re: /\b(broke up|breaks up|dumped|ended their relationship)\b|\b(расстал|расстались|бросил|бросила|разрыв отношений)\b/i },
+    { type: 'dating', note: 'auto: romantic relationship happened in RP', re: /\b(started dating|became a couple|became lovers|slept together|spent the night together|kissed passionately|kissed him|kissed her|kissed them|kissed)\b|\b(начали встречаться|стали парой|переспал|переспала|поцеловал|поцеловала|поцеловали|поцелуй|страстно поцелов)\b/i },
     { type: 'crush', note: 'auto: romantic interest surfaced in RP', re: /\b(confessed (his|her|their)? love|admitted (his|her|their)? feelings|has a crush|blushed at|flirted with)\b|\b(признал[ась]* в любви|признал[ась]* в чувствах|влюбил[ась]*|флиртовал|флиртовала|зардел[ась]*)\b/i },
-    { type: 'enemies', note: 'auto: hostile act happened in RP', re: /\b(tried to kill|attempted to kill|shot at|stabbed|attacked|betrayed|declared war|swore revenge|threatened to kill|held .* at gunpoint|enemy|enemies)\b|\b(попытал[ась]* убить|пытал[ась]* убить|застрел|выстрелил в|ударил ножом|напал|напала|предал|предала|объявил[аи]? войну|поклял[ась]* отомстить|угрожал убить|враг|враги)\b/i },
-    { type: 'rival', note: 'auto: rivalry emerged in RP', re: /\b(became rivals|challenged|challenged .* for|competed with|competition between|rivalry|rivals)\b|\b(стали соперниками|вызвал[аи]? на|соревновал[ись]*|конкурировал|конкурировала|соперник|соперница|соперники)\b/i },
+    { type: 'enemies', note: 'auto: hostile act happened in RP', re: /\b(tried to kill|attempted to kill|shot at|stabbed|attacked|betrayed|declared war|swore revenge|threatened to kill|held .* at gunpoint)\b|\b(попытал[ась]* убить|пытал[ась]* убить|застрел|выстрелил в|ударил ножом|напал|напала|предал|предала|объявил[аи]? войну|поклял[ась]* отомстить|угрожал убить)\b/i },
+    { type: 'rival', note: 'auto: rivalry emerged in RP', re: /\b(became rivals|challenged|challenged .* for|competed with|competition between)\b|\b(стали соперниками|вызвал[аи]? на|соревновал[ись]*|конкурировал|конкурировала)\b/i },
     { type: 'ally', note: 'auto: alliance/support happened in RP', re: /\b(formed an alliance|allied with|protected|saved|rescued|backed .* up|covered for|stood with)\b|\b(заключил[аи]? союз|стал[аи]? союзниками|защитил|защитила|спас|спасла|прикрыл|прикрыла|встал[аи]? на сторону)\b/i },
     { type: 'friends', note: 'auto: friendship/trust happened in RP', re: /\b(became friends|made peace|trusted|opened up to|forgave|reconciled)\b|\b(стали друзьями|подружил|подружились|помирил|помирились|доверил[ась]*|простил|простила|примирил)\b/i },
     { type: 'crew', note: 'auto: joined the same group in RP', re: /\b(joined .* crew|joined .* gang|same crew|recruited into|became part of)\b|\b(вступил[аи]? в .*банд|присоединил[ась]* к|стал[аи]? частью|одна банда|одна команда)\b/i },
-    { type: 'parent', note: 'auto: parent/child relation revealed in RP', re: /\b(father of|mother of|parent of|his father|her father|their father|his mother|her mother|their mother)\b|\b(отец|мать|родитель|папа|мама)\b/i },
-    { type: 'sibling', note: 'auto: sibling relation revealed in RP', re: /\b(brother|sister|siblings|twins)\b|\b(брат|сестра|сиблинг|близнец|близнецы)\b/i },
-    { type: 'family', note: 'auto: family relation revealed in RP', re: /\b(family|cousin|uncle|aunt|relative)\b|\b(семья|родня|родственник|дядя|тётя|кузен|кузина)\b/i },
 ];
 
 function classifyRelationshipEvent(sentence) {
@@ -459,7 +471,7 @@ function classifyRelationshipEvent(sentence) {
 
 function pairActorsForEvent(actors, message) {
     if (actors.length >= 2) return [actors[0], actors[1]];
-    if (message?.is_user && actors.length === 1) return [currentUserName(), actors[0]];
+    if (message?.is_user && actors.length === 1) return [currentUserName(message), actors[0]];
     return null;
 }
 

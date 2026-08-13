@@ -1,6 +1,6 @@
 // NPC Relationship Web — fandom-independent relationship and genealogy editor for SillyTavern.
 
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 const MODULE = 'st-relationship-web';
 const INJECT_KEY = 'relationship_web';
 
@@ -27,7 +27,8 @@ const L10N = {
         title: '🕸️ Relationship Web',
         enabled: 'Enabled',
         inject: 'Inject relationships into prompt',
-        autoParse: 'Auto-parse [REL: A x B = type] tags from AI messages',
+        autoParse: 'Auto-parse [REL: A x B = type] tags from messages',
+        autoEvents: 'Auto-update relations when RP events happen',
         language: 'Language',
         mode: 'View mode',
         webMode: 'Relationship web',
@@ -58,6 +59,8 @@ const L10N = {
         injectRelations: 'Relationships:',
         injectFooter: 'The user can edit this map manually. To suggest an update, append [REL: Name A x Name B = type | optional note] at the end of the reply.]',
         parsedToast: (a, b, type) => `${a} × ${b}: ${type}`,
+        eventToast: (a, b, type) => `Событие RP: ${a} × ${b} → ${type}`, 
+        eventToast: (a, b, type) => `RP event detected: ${a} × ${b} → ${type}`, 
         webTitle: 'Relationship Web',
         close: 'Close',
         zoomIn: 'Zoom +',
@@ -70,7 +73,8 @@ const L10N = {
         title: '🕸️ Карта отношений',
         enabled: 'Включено',
         inject: 'Внедрять отношения в промпт',
-        autoParse: 'Авто-парсинг тегов [REL: A x B = type] из ответов ИИ',
+        autoParse: 'Авто-парсинг тегов [REL: A x B = type] из сообщений',
+        autoEvents: 'Автообновлять отношения, когда событие произошло в RP',
         language: 'Язык',
         mode: 'Режим отображения',
         webMode: 'Карта отношений',
@@ -101,6 +105,7 @@ const L10N = {
         injectRelations: 'Связи:',
         injectFooter: 'Пользователь может редактировать карту вручную. Чтобы предложить обновление, добавь в конце ответа [REL: Имя A x Имя B = type | необязательная заметка].]',
         parsedToast: (a, b, type) => `${a} × ${b}: ${type}`,
+        eventToast: (a, b, type) => `RP event detected: ${a} × ${b} → ${type}`, 
         webTitle: 'Карта отношений',
         close: 'Закрыть',
         zoomIn: 'Масштаб +',
@@ -159,6 +164,7 @@ const defaultSettings = {
     enabled: true,
     inject: true,
     autoParse: true,
+    autoEvents: true,
     mode: 'web',
     people: [],
     relations: [],
@@ -223,25 +229,31 @@ function upsertRelation(a, b, type, note = '') {
     a = normalizeName(a);
     b = normalizeName(b);
     type = String(type || 'friends').toLowerCase();
-    if (!a || !b || !REL_TYPES.includes(type)) return;
+    if (!a || !b || !REL_TYPES.includes(type)) return false;
     ensurePerson(a);
     ensurePerson(b);
     const s = settings();
     const found = s.relations.find(r =>
         (keyName(r.a) === keyName(a) && keyName(r.b) === keyName(b)) ||
         (keyName(r.a) === keyName(b) && keyName(r.b) === keyName(a)));
+    let changed = false;
     if (found) {
+        changed = found.type !== type || (!!note && found.note !== note) || found.a !== a || found.b !== b;
         found.a = a;
         found.b = b;
         found.type = type;
         found.note = note || found.note || '';
     } else {
         s.relations.push({ a, b, type, note });
+        changed = true;
     }
-    save();
-    renderPanel();
-    updateInjection();
-    drawCurrentView();
+    if (changed) {
+        save();
+        renderPanel();
+        updateInjection();
+        drawCurrentView();
+    }
+    return changed;
 }
 
 function addTemplate(name) {
@@ -280,13 +292,79 @@ function updateInjection() {
     c.setExtensionPrompt(INJECT_KEY, lines.join('\n'), 1, 4);
 }
 
-function parseMessage(messageId) {
-    const s = settings();
-    if (!s.enabled || !s.autoParse) return;
+function currentUserName() {
     const c = ctx();
-    const message = c.chat?.[messageId];
-    if (!message || message.is_user || message.is_system) return;
+    return normalizeName(c.name1 || c.user?.name || c.persona?.name || c.character?.name || 'User');
+}
 
+function sentenceParts(text) {
+    return String(text || '')
+        .replace(/<[^>]+>/g, ' ')
+        .split(/(?<=[.!?。！？])\s+|\n+/)
+        .map(x => x.trim())
+        .filter(Boolean);
+}
+
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function mentionedActors(sentence, message) {
+    const lower = sentence.toLowerCase();
+    const actors = [];
+    const add = (name) => {
+        name = normalizeName(name);
+        if (!name || actors.some(x => keyName(x) === keyName(name))) return;
+        actors.push(name);
+    };
+    const people = allPeople().sort((a, b) => b.name.length - a.name.length);
+    for (const p of people) {
+        if (/neutral ground|venue|club|casino|restaurant|church|office|gym|facility|place/i.test(p.role || '')) continue;
+        const name = p.name;
+        const re = new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegExp(name)}([^\\p{L}\\p{N}_]|$)`, 'iu');
+        if (re.test(sentence)) add(name);
+    }
+    const userName = currentUserName();
+    if (userName && userName !== 'User') {
+        const re = new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegExp(userName)}([^\\p{L}\\p{N}_]|$)`, 'iu');
+        if (re.test(sentence)) add(userName);
+    }
+    if (message?.is_user && /\b(i|me|my|mine)\b|\b(я|меня|мне|мой|моя|мои|со мной|со мною)\b/i.test(lower)) {
+        add(userName || 'User');
+    }
+    return actors;
+}
+
+const EVENT_RULES = [
+    { type: 'spouse', note: 'auto: marriage/wedding happened in RP', re: /\b(married|wedding|wed\b|husband|wife|spouse)\b|\b(поженил|поженились|свадьб|мужем|женой|супруг|супруга)\b/i },
+    { type: 'ex', note: 'auto: breakup happened in RP', re: /\b(broke up|breaks up|dumped|left him|left her|ended their relationship|exes?)\b|\b(расстал|расстались|бросил|бросила|бывш|разрыв отношений)\b/i },
+    { type: 'dating', note: 'auto: romantic relationship happened in RP', re: /\b(started dating|became a couple|became lovers|lovers|boyfriend|girlfriend|slept together|spent the night together|kissed passionately|kissed him|kissed her|kissed them|kissed)\b|\b(начали встречаться|стали парой|любовник|любовница|парень|девушка|переспал|переспала|поцеловал|поцеловала|поцеловали|поцелуй|страстно поцелов)\b/i },
+    { type: 'crush', note: 'auto: romantic interest surfaced in RP', re: /\b(confessed (his|her|their)? love|admitted (his|her|their)? feelings|has a crush|blushed at|flirted with)\b|\b(признал[ась]* в любви|признал[ась]* в чувствах|влюбил[ась]*|флиртовал|флиртовала|зардел[ась]*)\b/i },
+    { type: 'enemies', note: 'auto: hostile act happened in RP', re: /\b(tried to kill|attempted to kill|shot at|stabbed|attacked|betrayed|declared war|swore revenge|threatened to kill|held .* at gunpoint|enemy|enemies)\b|\b(попытал[ась]* убить|пытал[ась]* убить|застрел|выстрелил в|ударил ножом|напал|напала|предал|предала|объявил[аи]? войну|поклял[ась]* отомстить|угрожал убить|враг|враги)\b/i },
+    { type: 'rival', note: 'auto: rivalry emerged in RP', re: /\b(became rivals|challenged|challenged .* for|competed with|competition between|rivalry|rivals)\b|\b(стали соперниками|вызвал[аи]? на|соревновал[ись]*|конкурировал|конкурировала|соперник|соперница|соперники)\b/i },
+    { type: 'ally', note: 'auto: alliance/support happened in RP', re: /\b(formed an alliance|allied with|protected|saved|rescued|backed .* up|covered for|stood with)\b|\b(заключил[аи]? союз|стал[аи]? союзниками|защитил|защитила|спас|спасла|прикрыл|прикрыла|встал[аи]? на сторону)\b/i },
+    { type: 'friends', note: 'auto: friendship/trust happened in RP', re: /\b(became friends|made peace|trusted|opened up to|forgave|reconciled)\b|\b(стали друзьями|подружил|подружились|помирил|помирились|доверил[ась]*|простил|простила|примирил)\b/i },
+    { type: 'crew', note: 'auto: joined the same group in RP', re: /\b(joined .* crew|joined .* gang|same crew|recruited into|became part of)\b|\b(вступил[аи]? в .*банд|присоединил[ась]* к|стал[аи]? частью|одна банда|одна команда)\b/i },
+    { type: 'parent', note: 'auto: parent/child relation revealed in RP', re: /\b(father of|mother of|parent of|his father|her father|their father|his mother|her mother|their mother)\b|\b(отец|мать|родитель|папа|мама)\b/i },
+    { type: 'sibling', note: 'auto: sibling relation revealed in RP', re: /\b(brother|sister|siblings|twins)\b|\b(брат|сестра|сиблинг|близнец|близнецы)\b/i },
+    { type: 'family', note: 'auto: family relation revealed in RP', re: /\b(family|cousin|uncle|aunt|relative)\b|\b(семья|родня|родственник|дядя|тётя|кузен|кузина)\b/i },
+];
+
+function classifyRelationshipEvent(sentence) {
+    for (const rule of EVENT_RULES) {
+        if (rule.re.test(sentence)) return rule;
+    }
+    return null;
+}
+
+function pairActorsForEvent(actors, message) {
+    if (actors.length >= 2) return [actors[0], actors[1]];
+    if (message?.is_user && actors.length === 1) return [currentUserName(), actors[0]];
+    return null;
+}
+
+function parseExplicitRelationTags(message) {
+    if (!settings().autoParse || !message?.mes) return false;
     const re = /\[REL:\s*([^\]=|]+?)\s*[x×]\s*([^\]=|]+?)\s*=\s*(\w+)\s*(?:\|\s*([^\]]+?))?\s*\]/gi;
     let changed = false;
     let match;
@@ -294,15 +372,49 @@ function parseMessage(messageId) {
         const [, a, b, typeRaw, noteRaw] = match;
         const type = typeRaw.toLowerCase();
         if (!REL_TYPES.includes(type)) continue;
-        upsertRelation(a, b, type, noteRaw || '');
-        toastr.info(t().parsedToast(a.trim(), b.trim(), relLabel(type)), t().title);
+        if (upsertRelation(a, b, type, noteRaw || 'manual/AI tag')) {
+            toastr.info(t().parsedToast(a.trim(), b.trim(), relLabel(type)), t().title);
+        }
         changed = true;
     }
-    if (changed) {
-        message.mes = message.mes.replace(re, '').trimEnd();
+    if (changed) message.mes = message.mes.replace(re, '').trimEnd();
+    return changed;
+}
+
+function parseRelationshipEvents(message) {
+    if (!settings().autoEvents || !message?.mes) return false;
+    let changed = false;
+    const seenPairs = new Set();
+    for (const sentence of sentenceParts(message.mes)) {
+        const rule = classifyRelationshipEvent(sentence);
+        if (!rule) continue;
+        const actors = mentionedActors(sentence, message);
+        const pair = pairActorsForEvent(actors, message);
+        if (!pair || keyName(pair[0]) === keyName(pair[1])) continue;
+        const key = [keyName(pair[0]), keyName(pair[1]), rule.type].sort().join('|');
+        if (seenPairs.has(key)) continue;
+        seenPairs.add(key);
+        if (upsertRelation(pair[0], pair[1], rule.type, rule.note)) {
+            toastr.info(t().eventToast(pair[0], pair[1], relLabel(rule.type)), t().title);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+function parseMessage(messageId) {
+    const s = settings();
+    if (!s.enabled) return;
+    const c = ctx();
+    const message = c.chat?.[messageId];
+    if (!message || message.is_system) return;
+    const explicitChanged = parseExplicitRelationTags(message);
+    const eventChanged = parseRelationshipEvents(message);
+    if (explicitChanged) {
         c.updateMessageBlock?.(messageId, message);
         save();
     }
+    if (eventChanged) save();
 }
 
 const graphView = { scale: 1, x: 0, y: 0, fitted: false, dragging: false, lastX: 0, lastY: 0 };
@@ -659,6 +771,7 @@ function renderPanel() {
                 <label class="checkbox_label"><input type="checkbox" id="rweb_enabled" ${s.enabled ? 'checked' : ''}><span>${loc.enabled}</span></label>
                 <label class="checkbox_label"><input type="checkbox" id="rweb_inject" ${s.inject ? 'checked' : ''}><span>${loc.inject}</span></label>
                 <label class="checkbox_label"><input type="checkbox" id="rweb_autoparse" ${s.autoParse ? 'checked' : ''}><span>${loc.autoParse}</span></label>
+                <label class="checkbox_label"><input type="checkbox" id="rweb_autoevents" ${s.autoEvents ? 'checked' : ''}><span>${loc.autoEvents}</span></label>
                 <div class="rweb-lang">
                     <span>${loc.language}:</span>
                     <select id="rweb_lang" class="text_pole">
@@ -716,6 +829,7 @@ function renderPanel() {
     $('#rweb_enabled').on('change', function () { s.enabled = this.checked; save(); updateInjection(); });
     $('#rweb_inject').on('change', function () { s.inject = this.checked; save(); updateInjection(); });
     $('#rweb_autoparse').on('change', function () { s.autoParse = this.checked; save(); });
+    $('#rweb_autoevents').on('change', function () { s.autoEvents = this.checked; save(); });
     $('#rweb_lang').on('change', function () { s.lang = this.value; save(); renderPanel(); updateInjection(); });
     $('#rweb_mode').on('change', function () { s.mode = this.value; save(); graphView.fitted = false; drawCurrentView(); });
     $('#rweb_open').on('click', openWebPopup);
@@ -745,5 +859,6 @@ jQuery(async () => {
     renderPanel();
     updateInjection();
     c.eventSource.on(c.eventTypes.MESSAGE_RECEIVED, parseMessage);
+    if (c.eventTypes.MESSAGE_SENT) c.eventSource.on(c.eventTypes.MESSAGE_SENT, parseMessage);
     c.eventSource.on(c.eventTypes.CHAT_CHANGED, updateInjection);
 });

@@ -1,6 +1,6 @@
 // NPC Relationship Web — fandom-independent relationship and genealogy editor for SillyTavern.
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 const MODULE = 'st-relationship-web';
 const INJECT_KEY = 'relationship_web';
 
@@ -29,6 +29,8 @@ const L10N = {
         inject: 'Inject relationships into prompt',
         autoParse: 'Auto-parse [REL: A x B = type] tags from messages',
         autoEvents: 'Auto-update relations when RP events happen',
+        autoDiscover: 'Auto-discover relatives/couples/rivals from chat text',
+        scanChat: 'Scan current chat',
         language: 'Language',
         mode: 'View mode',
         webMode: 'Relationship web',
@@ -59,8 +61,12 @@ const L10N = {
         injectRelations: 'Relationships:',
         injectFooter: 'The user can edit this map manually. To suggest an update, append [REL: Name A x Name B = type | optional note] at the end of the reply.]',
         parsedToast: (a, b, type) => `${a} × ${b}: ${type}`,
-        eventToast: (a, b, type) => `Событие RP: ${a} × ${b} → ${type}`, 
-        eventToast: (a, b, type) => `RP event detected: ${a} × ${b} → ${type}`, 
+        eventToast: (a, b, type) => `Событие RP: ${a} × ${b} → ${type}`,
+        discoveryToast: (a, b, type) => `Найдено: ${a} × ${b} → ${type}`,
+        scanDone: (count) => `Скан завершён: ${count} обновлений`, 
+        eventToast: (a, b, type) => `RP event detected: ${a} × ${b} → ${type}`,
+        discoveryToast: (a, b, type) => `Discovered: ${a} × ${b} → ${type}`,
+        scanDone: (count) => `Scan complete: ${count} updates`, 
         webTitle: 'Relationship Web',
         close: 'Close',
         zoomIn: 'Zoom +',
@@ -75,6 +81,8 @@ const L10N = {
         inject: 'Внедрять отношения в промпт',
         autoParse: 'Авто-парсинг тегов [REL: A x B = type] из сообщений',
         autoEvents: 'Автообновлять отношения, когда событие произошло в RP',
+        autoDiscover: 'Самой находить родственников/пары/соперников из текста чата',
+        scanChat: 'Просканировать текущий чат',
         language: 'Язык',
         mode: 'Режим отображения',
         webMode: 'Карта отношений',
@@ -105,7 +113,9 @@ const L10N = {
         injectRelations: 'Связи:',
         injectFooter: 'Пользователь может редактировать карту вручную. Чтобы предложить обновление, добавь в конце ответа [REL: Имя A x Имя B = type | необязательная заметка].]',
         parsedToast: (a, b, type) => `${a} × ${b}: ${type}`,
-        eventToast: (a, b, type) => `RP event detected: ${a} × ${b} → ${type}`, 
+        eventToast: (a, b, type) => `RP event detected: ${a} × ${b} → ${type}`,
+        discoveryToast: (a, b, type) => `Discovered: ${a} × ${b} → ${type}`,
+        scanDone: (count) => `Scan complete: ${count} updates`, 
         webTitle: 'Карта отношений',
         close: 'Закрыть',
         zoomIn: 'Масштаб +',
@@ -165,6 +175,7 @@ const defaultSettings = {
     inject: true,
     autoParse: true,
     autoEvents: true,
+    autoDiscover: true,
     mode: 'web',
     people: [],
     relations: [],
@@ -309,7 +320,96 @@ function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+
+const NAME_PATTERN = `[A-ZА-ЯЁ][\\p{L}'’\-]+(?:\\s+(?:[A-ZА-ЯЁ][\\p{L}'’\-]+|["“”'’][^"“”'’]{1,24}["“”'’])){0,3}`;
+const STOP_NAMES = new Set([
+    'the', 'a', 'an', 'he', 'she', 'they', 'we', 'i', 'you', 'it', 'his', 'her', 'their', 'this', 'that',
+    'он', 'она', 'они', 'мы', 'я', 'ты', 'вы', 'его', 'её', 'ее', 'их', 'это', 'этот', 'эта', 'тот', 'та',
+    'new orleans', 'french quarter', 'bayou crew', 'voodoo boys', 'cash casino', 'club zion', 'nopd',
+]);
+
+function cleanDetectedName(value) {
+    let name = normalizeName(value)
+        .replace(/^[\s,.:;—–\-"“”'’]+|[\s,.:;—–\-"“”'’]+$/g, '')
+        .replace(/[’']s$/i, '');
+    name = name.replace(/\s+/g, ' ');
+    if (!name || STOP_NAMES.has(name.toLowerCase())) return '';
+    if (name.length < 2 || name.length > 80) return '';
+    return name;
+}
+
+function discoveryPatterns() {
+    const n = `(${NAME_PATTERN})`;
+    return [
+        { type: 'spouse', note: 'auto: spouse/marriage discovered from chat', re: new RegExp(`${n}\\s+(?:and|&)\\s+${n}\\s+(?:are|were|became|got)?\\s*(?:married|spouses|husband and wife)`, 'gu') },
+        { type: 'spouse', note: 'auto: spouse/marriage discovered from chat', re: new RegExp(`${n}\\s+(?:и)\\s+${n}\\s+(?:поженились|стали супругами|муж и жена)`, 'gu') },
+        { type: 'spouse', note: 'auto: spouse/marriage discovered from chat', re: new RegExp(`${n}\\s+(?:is|was|became)?\\s*(?:the\\s+)?(?:husband|wife|spouse)\\s+(?:of\\s+)?${n}`, 'gu') },
+        { type: 'spouse', note: 'auto: spouse/marriage discovered from chat', re: new RegExp(`${n}\\s+(?:—|-|является|стал|стала)?\\s*(?:муж|жена|супруг|супруга)\\s+${n}`, 'gu') },
+
+        { type: 'dating', note: 'auto: couple/romance discovered from chat', re: new RegExp(`${n}\\s+(?:and|&)\\s+${n}\\s+(?:are|were|became|started)?\\s*(?:dating|a couple|lovers|boyfriend and girlfriend)`, 'gu') },
+        { type: 'dating', note: 'auto: couple/romance discovered from chat', re: new RegExp(`${n}\\s+(?:и)\\s+${n}\\s+(?:встречаются|стали парой|начали встречаться|любовники)`, 'gu') },
+        { type: 'dating', note: 'auto: kiss/romance happened in RP', re: new RegExp(`${n}\\s+(?:kissed|slept with|made out with)\\s+${n}`, 'gu') },
+        { type: 'dating', note: 'auto: kiss/romance happened in RP', re: new RegExp(`${n}\\s+(?:поцеловал[аи]?|переспал[аи]? с|целовал[аи]?|страстно поцеловал[аи]?)\\s+${n}`, 'gu') },
+
+        { type: 'ex', note: 'auto: breakup/ex discovered from chat', re: new RegExp(`${n}\\s+(?:and|&)\\s+${n}\\s+(?:broke up|split up|became exes|are exes)`, 'gu') },
+        { type: 'ex', note: 'auto: breakup/ex discovered from chat', re: new RegExp(`${n}\\s+(?:и)\\s+${n}\\s+(?:расстались|стали бывшими|разошлись)`, 'gu') },
+
+        { type: 'parent', note: 'auto: parent relation discovered from chat', re: new RegExp(`${n}\\s+(?:is|was|became)?\\s*(?:the\\s+)?(?:father|mother|parent)\\s+of\\s+${n}`, 'gu') },
+        { type: 'parent', note: 'auto: parent relation discovered from chat', re: new RegExp(`${n}\\s+(?:is|was)?\\s*${n}[’']s\\s+(?:father|mother|parent)`, 'gu') },
+        { type: 'parent', note: 'auto: parent relation discovered from chat', re: new RegExp(`${n}\\s+(?:—|-|является|стал|стала)?\\s*(?:отец|мать|родитель)\\s+${n}`, 'gu') },
+        { type: 'child', note: 'auto: child relation discovered from chat', re: new RegExp(`${n}\\s+(?:is|was)?\\s*${n}[’']s\\s+(?:son|daughter|child)`, 'gu') },
+        { type: 'child', note: 'auto: child relation discovered from chat', re: new RegExp(`${n}\\s+(?:—|-|является|стал|стала)?\\s*(?:сын|дочь|реб[её]нок)\\s+${n}`, 'gu') },
+        { type: 'parent', note: 'auto: parent relation discovered from chat', reverse: true, re: new RegExp(`${n}[’']s\\s+(?:father|mother|parent)\\s+(?:is|was)?\\s*${n}`, 'gu') },
+        { type: 'parent', note: 'auto: parent relation discovered from chat', reverse: true, re: new RegExp(`(?:отец|мать|родитель)\\s+${n}\\s+(?:—|-|это|был|была|является)?\\s*${n}`, 'gu') },
+
+        { type: 'sibling', note: 'auto: sibling relation discovered from chat', re: new RegExp(`${n}\\s+(?:and|&)\\s+${n}\\s+(?:are|were)?\\s*(?:brothers|sisters|siblings|twins)`, 'gu') },
+        { type: 'sibling', note: 'auto: sibling relation discovered from chat', re: new RegExp(`${n}\\s+(?:и)\\s+${n}\\s+(?:братья|сёстры|сестры|сиблинги|близнецы|родные)`, 'gu') },
+        { type: 'sibling', note: 'auto: sibling relation discovered from chat', re: new RegExp(`${n}\\s+(?:is|was)?\\s*(?:the\\s+)?(?:brother|sister|sibling|twin)\\s+of\\s+${n}`, 'gu') },
+        { type: 'sibling', note: 'auto: sibling relation discovered from chat', re: new RegExp(`${n}\\s+(?:—|-|является)?\\s*(?:брат|сестра|сиблинг|близнец|близняшка)\\s+${n}`, 'gu') },
+
+        { type: 'family', note: 'auto: family relation discovered from chat', re: new RegExp(`${n}\\s+(?:and|&)\\s+${n}\\s+(?:are|were)?\\s*(?:family|relatives|cousins)`, 'gu') },
+        { type: 'family', note: 'auto: family relation discovered from chat', re: new RegExp(`${n}\\s+(?:и)\\s+${n}\\s+(?:родня|родственники|семья|кузены|кузины)`, 'gu') },
+
+        { type: 'enemies', note: 'auto: hostility discovered from RP', re: new RegExp(`${n}\\s+(?:betrayed|attacked|shot at|stabbed|tried to kill|declared war on|threatened to kill)\\s+${n}`, 'gu') },
+        { type: 'enemies', note: 'auto: hostility discovered from RP', re: new RegExp(`${n}\\s+(?:предал[аи]?|напал[аи]? на|атаковал[аи]?|выстрелил[аи]? в|пытал[ась]* убить|объявил[аи]? войну|угрожал[аи]? убить)\\s+${n}`, 'gu') },
+        { type: 'rival', note: 'auto: rivalry discovered from RP', re: new RegExp(`${n}\\s+(?:and|&)\\s+${n}\\s+(?:became|are|were)?\\s*(?:rivals|competitors)`, 'gu') },
+        { type: 'rival', note: 'auto: rivalry discovered from RP', re: new RegExp(`${n}\\s+(?:и)\\s+${n}\\s+(?:стали|были|являются)?\\s*(?:соперниками|конкурентами)`, 'gu') },
+
+        { type: 'ally', note: 'auto: alliance/support discovered from RP', re: new RegExp(`${n}\\s+(?:saved|rescued|protected|covered for|stood with|allied with)\\s+${n}`, 'gu') },
+        { type: 'ally', note: 'auto: alliance/support discovered from RP', re: new RegExp(`${n}\\s+(?:спас|спасла|защитил[аи]?|прикрыл[аи]?|встал[аи]? на сторону|заключил[аи]? союз с)\\s+${n}`, 'gu') },
+        { type: 'friends', note: 'auto: friendship/trust discovered from RP', re: new RegExp(`${n}\\s+(?:and|&)\\s+${n}\\s+(?:became|are|were)?\\s*(?:friends|close friends)`, 'gu') },
+        { type: 'friends', note: 'auto: friendship/trust discovered from RP', re: new RegExp(`${n}\\s+(?:и)\\s+${n}\\s+(?:стали|были|являются)?\\s*(?:друзьями|близкими друзьями)`, 'gu') },
+    ];
+}
+
+function parseDiscoveryPatterns(message, silent = false) {
+    if (!settings().autoDiscover || !message?.mes) return 0;
+    let updates = 0;
+    const seen = new Set();
+    for (const sentence of sentenceParts(message.mes)) {
+        for (const pattern of discoveryPatterns()) {
+            pattern.re.lastIndex = 0;
+            let match;
+            while ((match = pattern.re.exec(sentence)) !== null) {
+                let a = cleanDetectedName(match[1]);
+                let b = cleanDetectedName(match[2]);
+                if (pattern.reverse) [a, b] = [b, a];
+                if (!a || !b || keyName(a) === keyName(b)) continue;
+                const key = [keyName(a), keyName(b), pattern.type].sort().join('|');
+                if (seen.has(key)) continue;
+                seen.add(key);
+                if (upsertRelation(a, b, pattern.type, pattern.note)) {
+                    updates++;
+                    if (!silent) toastr.info(t().discoveryToast(a, b, relLabel(pattern.type)), t().title);
+                }
+            }
+        }
+    }
+    return updates;
+}
+
 function mentionedActors(sentence, message) {
+
     const lower = sentence.toLowerCase();
     const actors = [];
     const add = (name) => {
@@ -363,7 +463,7 @@ function pairActorsForEvent(actors, message) {
     return null;
 }
 
-function parseExplicitRelationTags(message) {
+function parseExplicitRelationTags(message, silent = false) {
     if (!settings().autoParse || !message?.mes) return false;
     const re = /\[REL:\s*([^\]=|]+?)\s*[x×]\s*([^\]=|]+?)\s*=\s*(\w+)\s*(?:\|\s*([^\]]+?))?\s*\]/gi;
     let changed = false;
@@ -373,7 +473,7 @@ function parseExplicitRelationTags(message) {
         const type = typeRaw.toLowerCase();
         if (!REL_TYPES.includes(type)) continue;
         if (upsertRelation(a, b, type, noteRaw || 'manual/AI tag')) {
-            toastr.info(t().parsedToast(a.trim(), b.trim(), relLabel(type)), t().title);
+            if (!silent) toastr.info(t().parsedToast(a.trim(), b.trim(), relLabel(type)), t().title);
         }
         changed = true;
     }
@@ -381,7 +481,7 @@ function parseExplicitRelationTags(message) {
     return changed;
 }
 
-function parseRelationshipEvents(message) {
+function parseRelationshipEvents(message, silent = false) {
     if (!settings().autoEvents || !message?.mes) return false;
     let changed = false;
     const seenPairs = new Set();
@@ -395,7 +495,7 @@ function parseRelationshipEvents(message) {
         if (seenPairs.has(key)) continue;
         seenPairs.add(key);
         if (upsertRelation(pair[0], pair[1], rule.type, rule.note)) {
-            toastr.info(t().eventToast(pair[0], pair[1], relLabel(rule.type)), t().title);
+            if (!silent) toastr.info(t().eventToast(pair[0], pair[1], relLabel(rule.type)), t().title);
             changed = true;
         }
     }
@@ -409,12 +509,29 @@ function parseMessage(messageId) {
     const message = c.chat?.[messageId];
     if (!message || message.is_system) return;
     const explicitChanged = parseExplicitRelationTags(message);
+    const discoveryUpdates = parseDiscoveryPatterns(message);
     const eventChanged = parseRelationshipEvents(message);
     if (explicitChanged) {
         c.updateMessageBlock?.(messageId, message);
         save();
     }
-    if (eventChanged) save();
+    if (discoveryUpdates || eventChanged) save();
+}
+
+function scanCurrentChat() {
+    const c = ctx();
+    let updates = 0;
+    for (const message of c.chat || []) {
+        if (!message || message.is_system) continue;
+        if (parseExplicitRelationTags(message, true)) updates++;
+        updates += parseDiscoveryPatterns(message, true);
+        if (parseRelationshipEvents(message, true)) updates++;
+    }
+    save();
+    renderPanel();
+    updateInjection();
+    drawCurrentView();
+    toastr.info(t().scanDone(updates), t().title);
 }
 
 const graphView = { scale: 1, x: 0, y: 0, fitted: false, dragging: false, lastX: 0, lastY: 0 };
@@ -772,6 +889,7 @@ function renderPanel() {
                 <label class="checkbox_label"><input type="checkbox" id="rweb_inject" ${s.inject ? 'checked' : ''}><span>${loc.inject}</span></label>
                 <label class="checkbox_label"><input type="checkbox" id="rweb_autoparse" ${s.autoParse ? 'checked' : ''}><span>${loc.autoParse}</span></label>
                 <label class="checkbox_label"><input type="checkbox" id="rweb_autoevents" ${s.autoEvents ? 'checked' : ''}><span>${loc.autoEvents}</span></label>
+                <label class="checkbox_label"><input type="checkbox" id="rweb_autodiscover" ${s.autoDiscover ? 'checked' : ''}><span>${loc.autoDiscover}</span></label>
                 <div class="rweb-lang">
                     <span>${loc.language}:</span>
                     <select id="rweb_lang" class="text_pole">
@@ -784,6 +902,7 @@ function renderPanel() {
                         <option value="tree" ${s.mode === 'tree' ? 'selected' : ''}>${loc.treeMode}</option>
                     </select>
                     <div class="menu_button" id="rweb_open">${loc.openWeb}</div>
+                    <div class="menu_button" id="rweb_scan">${loc.scanChat}</div>
                 </div>
 
                 <details class="rweb-section" open>
@@ -830,9 +949,11 @@ function renderPanel() {
     $('#rweb_inject').on('change', function () { s.inject = this.checked; save(); updateInjection(); });
     $('#rweb_autoparse').on('change', function () { s.autoParse = this.checked; save(); });
     $('#rweb_autoevents').on('change', function () { s.autoEvents = this.checked; save(); });
+    $('#rweb_autodiscover').on('change', function () { s.autoDiscover = this.checked; save(); });
     $('#rweb_lang').on('change', function () { s.lang = this.value; save(); renderPanel(); updateInjection(); });
     $('#rweb_mode').on('change', function () { s.mode = this.value; save(); graphView.fitted = false; drawCurrentView(); });
     $('#rweb_open').on('click', openWebPopup);
+    $('#rweb_scan').on('click', scanCurrentChat);
     $('#rweb_add_person').on('click', () => {
         addPerson($('#rweb_person_name').val(), $('#rweb_person_role').val(), $('#rweb_person_note').val());
     });
